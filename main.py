@@ -16,6 +16,7 @@ from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 from zoneinfo import ZoneInfo
 from nacl.signing import VerifyKey
+from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 
 KST = ZoneInfo("Asia/Seoul")
 
@@ -246,9 +247,38 @@ CREATE INDEX IF NOT EXISTS idx_visits_user_place ON visits(user_id, place_id);
 # ----------------------------
 # OAuth (visitor login)
 # ----------------------------
-DISCORD_AUTH_URL = "https://discord.com/api/oauth2/authorize"
+# Authorization endpoint (recommended): https://discord.com/oauth2/authorize
+DISCORD_AUTH_URL = "https://discord.com/oauth2/authorize"
 DISCORD_TOKEN_URL = "https://discord.com/api/oauth2/token"
 DISCORD_ME_URL = "https://discord.com/api/users/@me"
+
+_OAUTH_STATE_SALT = "discord-oauth-state"
+_state_serializer = URLSafeTimedSerializer(SESSION_SECRET, salt=_OAUTH_STATE_SALT)
+
+def _make_oauth_state(loc: str) -> str:
+    loc = (loc or "").strip()[:64]
+    payload = {"loc": loc, "t": int(_now_kst().timestamp())}
+    return _state_serializer.dumps(payload)
+
+def _parse_oauth_state(state: str) -> str:
+    if not state:
+        return ""
+    try:
+        data = _state_serializer.loads(state, max_age=60 * 20)  # 20 minutes
+        return (data.get("loc") or "").strip()
+    except (BadSignature, SignatureExpired):
+        return ""
+
+def _build_authorize_url(*, loc: str = "") -> str:
+    params: Dict[str, Any] = {
+        "client_id": DISCORD_CLIENT_ID,
+        "redirect_uri": OAUTH_REDIRECT_URI,
+        "response_type": "code",
+        "scope": "identify",
+    }
+    if loc:
+        params["state"] = _make_oauth_state(loc)
+    return str(httpx.URL(DISCORD_AUTH_URL).copy_merge_params(params))
 
 def _require_env() -> None:
     missing = []
@@ -366,9 +396,19 @@ async def index(request: Request, loc: str = ""):
     status_text = "로그인 필요" if not is_logged_in else "로그인됨"
     logout_style = "" if is_logged_in else "display:none;"
 
+    oauth_url = _build_authorize_url(loc=slug) if slug else _build_authorize_url(loc="")
+
     return templates.TemplateResponse(
         "index.html",
-        {"request": request, "loc": slug, "place_name": place_name, "is_logged_in": is_logged_in, "status_text": status_text, "logout_style": logout_style},
+        {
+            "request": request,
+            "loc": slug,
+            "place_name": place_name,
+            "is_logged_in": is_logged_in,
+            "status_text": status_text,
+            "logout_style": logout_style,
+            "oauth_url": oauth_url,
+        },
     )
 
 @app.get("/login")
@@ -376,18 +416,12 @@ async def login(request: Request, loc: str = ""):
     if loc:
         request.session["return_loc"] = loc
 
-    params = {
-        "client_id": DISCORD_CLIENT_ID,
-        "redirect_uri": OAUTH_REDIRECT_URI,
-        "response_type": "code",
-        "scope": "identify",
-        "prompt": "none",
-    }
-    url = str(httpx.URL(DISCORD_AUTH_URL).copy_merge_params(params))
+    # Note: do not force prompt=none; it can fail in many mobile/app flows.
+    url = _build_authorize_url(loc=loc)
     return RedirectResponse(url, status_code=302)
 
 @app.get("/oauth/callback")
-async def oauth_callback(request: Request, code: str = ""):
+async def oauth_callback(request: Request, code: str = "", state: str = ""):
     if not code:
         raise HTTPException(status_code=400, detail="Missing code")
 
@@ -396,7 +430,9 @@ async def oauth_callback(request: Request, code: str = ""):
 
     request.session["user"] = {"id": user.get("id"), "username": user.get("username"), "global_name": user.get("global_name")}
 
-    loc = (request.session.pop("return_loc", "") or "").strip()
+    loc = _parse_oauth_state(state)
+    if not loc:
+        loc = (request.session.pop("return_loc", "") or "").strip()
     if loc:
         return RedirectResponse(f"/?loc={loc}", status_code=302)
     return RedirectResponse("/", status_code=302)

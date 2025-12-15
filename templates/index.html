@@ -36,7 +36,62 @@
 </div>
 
 <script>
-const LOC = "{{ loc }}";
+const LOC = {{ loc | tojson }};
+const OAUTH_URL = {{ oauth_url | tojson }};
+const IS_LOGGED_IN = {{ 'true' if is_logged_in else 'false' }};
+
+function isAndroid(){
+  return /Android/i.test(navigator.userAgent);
+}
+
+function isIOS(){
+  return /iPhone|iPad|iPod/i.test(navigator.userAgent);
+}
+
+function buildAndroidIntentUrl(webUrl){
+  try{
+    const u = new URL(webUrl);
+    const fallback = encodeURIComponent(webUrl);
+    return `intent://${u.host}${u.pathname}${u.search}#Intent;scheme=https;package=com.discord;S.browser_fallback_url=${fallback};end`;
+  }catch(e){
+    return "";
+  }
+}
+
+function buildDiscordSchemeUrl(webUrl){
+  // Try to open via the Discord app scheme; fallback to web.
+  return webUrl.replace(/^https:\/\//i, "discord://");
+}
+
+function startDiscordLogin(){
+  // Mobile browsers often require a user gesture for deep links.
+  // This function is called directly from the button click when possible.
+  const web = OAUTH_URL;
+
+  // Desktop: just use the normal web OAuth flow.
+  if(!isAndroid() && !isIOS()){
+    window.location.href = web;
+    return;
+  }
+  const intent = buildAndroidIntentUrl(web);
+  const scheme = buildDiscordSchemeUrl(web);
+
+  // 1) Android: try intent:// which more strongly prefers the installed app
+  if(isAndroid() && intent){
+    window.location.href = intent;
+  } else {
+    // 2) iOS/others: try discord://
+    window.location.href = scheme;
+  }
+
+  // 3) fallback to web OAuth if the app doesn't open
+  setTimeout(() => {
+    // If the app opened, the page usually becomes hidden.
+    if(document.visibilityState !== "hidden"){
+      window.location.href = web;
+    }
+  }, 800);
+}
 
 function showResult(kind, html){
   const box = document.getElementById("resultBox");
@@ -51,6 +106,12 @@ document.getElementById("logoutBtn").addEventListener("click", () => {
 
 document.getElementById("checkinBtn").addEventListener("click", async () => {
   try{
+    if(!IS_LOGGED_IN){
+      showResult("err", "Discord 로그인 후 체크인할 수 있어요. 로그인 화면으로 이동합니다.");
+      startDiscordLogin();
+      return;
+    }
+
     const r = await fetch("/api/checkin", {
       method:"POST",
       headers: {"Content-Type":"application/json"},
@@ -59,8 +120,8 @@ document.getElementById("checkinBtn").addEventListener("click", async () => {
     });
 
     if(r.status === 401){
-      showResult("err", "Discord 로그인 후 체크인할 수 있어요. 잠시 후 로그인 화면으로 이동합니다.");
-      setTimeout(() => { window.location.href = "/login?loc=" + encodeURIComponent(LOC); }, 650);
+      showResult("err", "세션이 만료됐어요. Discord 로그인 화면으로 이동합니다.");
+      startDiscordLogin();
       return;
     }
 
