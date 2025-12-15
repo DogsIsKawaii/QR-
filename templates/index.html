@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>체크인</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <main class="wrap">
+    <section class="card">
+      <header class="header">
+        <h1>체크인</h1>
+        <p class="sub">장소: <b>{{ loc if loc else "미지정" }}</b></p>
+        <p class="status">
+          상태:
+          {% if is_authed %}
+            <span class="ok">로그인됨</span>
+            <span class="me">({{ display_name }})</span>
+          {% else %}
+            <span class="bad">로그인 필요</span>
+          {% endif %}
+        </p>
+      </header>
+
+      <button id="checkinBtn" class="btn primary">Discord로 체크인</button>
+
+      <a id="loginBtn" class="btn ghost" href="#" style="display:none;">Discord 로그인</a>
+      <a class="btn ghost" href="/logout?loc={{ loc | urlencode }}">로그아웃</a>
+
+      <div id="msg" class="msg"></div>
+
+      <footer class="foot">
+        <small>QR로 접속한 페이지에서 체크인 버튼을 누르세요.</small>
+      </footer>
+    </section>
+  </main>
+
+  <script>
+    window.__LOC__ = {{ (loc or "") | tojson }};
+  </script>
+  <script src="/static/app.js"></script>
+</body>
+</html>
