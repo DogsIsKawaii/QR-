@@ -456,21 +456,23 @@ async def api_checkin(request: Request):
     else:
         dm_ok = True
 
-    admin_label = "오늘 첫 방문" if inserted else "이미 오늘 방문"
-    ping = f"\n<@&{DISCORD_PING_ROLE_ID}>" if DISCORD_PING_ROLE_ID else ""
-    visitor_line = f"{server_display} ({username})"
-    visit_time_str = _format_hhmm_kst(now)
+    # NOTE: 이미 오늘(해당 장소) 체크인한 경우에는 운영진 채널에 메시지를 남기지 않습니다.
+    if inserted:
+        admin_label = "오늘 첫 방문"
+        ping = f"\n<@&{DISCORD_PING_ROLE_ID}>" if DISCORD_PING_ROLE_ID else ""
+        visitor_line = f"{server_display} ({username})"
+        visit_time_str = _format_hhmm_kst(now)
 
-    admin_text = (
-        f"## [입장 알림] {server_display}님이 체크인했습니다! ({admin_label})\n"
-        f"방문자 : {visitor_line}\n"
-        f"방문 시간 : {visit_time_str} (KST)\n"
-        f"방문 횟수 : {count}번째 방문\n"
-        f"{place_nickname} : {slug}"
-        + ("" if dm_ok else "\n※ DM 전송 실패(사용자 DM 차단 가능)")
-        + ping
-    )
-    await _send_admin_log(admin_text)
+        admin_text = (
+            f"## [입장 알림] {server_display}님이 체크인했습니다! ({admin_label})\n"
+            f"방문자 : {visitor_line}\n"
+            f"방문 시간 : {visit_time_str} (KST)\n"
+            f"방문 횟수 : {count}번째 방문\n"
+            f"{place_nickname} : {slug}"
+            + ("" if dm_ok else "\n※ DM 전송 실패(사용자 DM 차단 가능)")
+            + ping
+        )
+        await _send_admin_log(admin_text)
 
     msg = f"{place_nickname} 체크인 완료" if inserted else f"오늘은 이미 {place_nickname} 체크인했습니다."
     return {"ok": True, "message": msg}
