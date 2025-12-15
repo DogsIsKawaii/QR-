@@ -327,7 +327,8 @@ async def api_checkin(request: Request):
             f"방문 횟수 : {visit_count}번째 방문
 "
             f"장소 : {loc}"
-            + ("" if dm_ok else "
+            + ("" if dm_ok else ")"
+            )        
 ※ DM 전송 실패(사용자 DM 차단 가능)")
         )
 
