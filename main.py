@@ -318,18 +318,12 @@ async def api_checkin(request: Request):
 
         admin_label = f"누적 {visit_count}회차" if visit_count != 1 else "오늘 첫 방문"
         admin_text = (
-            f"[입장 알림] {display_name}님이 체크인했습니다! ({admin_label})
-"
-            f"방문자 : {uid}
-"
-            f"방문 시간 : {visit_time_str} (KST)
-"
-            f"방문 횟수 : {visit_count}번째 방문
-"
+            f"[입장 알림] {display_name}님이 체크인했습니다! ({admin_label})\n"
+            f"방문자 : {uid}\n"
+            f"방문 시간 : {visit_time_str} (KST)\n"
+            f"방문 횟수 : {visit_count}번째 방문\n"
             f"장소 : {loc}"
-            + ("" if dm_ok else ")"
-            )        
-※ DM 전송 실패(사용자 DM 차단 가능)")
+            + ("" if dm_ok else "\n※ DM 전송 실패(사용자 DM 차단 가능)")
         )
 
         try:
