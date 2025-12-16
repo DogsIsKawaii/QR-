@@ -11,9 +11,12 @@ import httpx
 import qrcode
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
+from starlette.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
+from starlette.middleware.sessions import SessionMiddleware
 from zoneinfo import ZoneInfo
 from nacl.signing import VerifyKey
+from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 
 KST = ZoneInfo("Asia/Seoul")
 
@@ -21,6 +24,7 @@ KST = ZoneInfo("Asia/Seoul")
 # Env
 # ----------------------------
 DISCORD_CLIENT_ID = os.getenv("DISCORD_CLIENT_ID", "").strip()
+DISCORD_CLIENT_SECRET = os.getenv("DISCORD_CLIENT_SECRET", "").strip()
 DISCORD_PUBLIC_KEY = os.getenv("DISCORD_PUBLIC_KEY", "").strip()
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN", "").strip()
 
@@ -29,15 +33,23 @@ DISCORD_ADMIN_CHANNEL_ID = os.getenv("DISCORD_ADMIN_CHANNEL_ID", "").strip()
 DISCORD_ADMIN_ROLE_ID = os.getenv("DISCORD_ADMIN_ROLE_ID", "").strip()
 DISCORD_PING_ROLE_ID = os.getenv("DISCORD_PING_ROLE_ID", "").strip()
 
+SESSION_SECRET = os.getenv("SESSION_SECRET", "dev_secret_change_me")
+OAUTH_REDIRECT_URI = os.getenv("OAUTH_REDIRECT_URI", "").strip()
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
+HTTPS_ONLY = os.getenv("HTTPS_ONLY", "true").lower() == "true"
 
-# optional (local dev) - if empty, base url is derived from request host
-BASE_URL = os.getenv("BASE_URL", "").strip()
+BASE_URL = os.getenv("BASE_URL", "").strip()  # optional for local dev; otherwise derived from request
 
 # ----------------------------
 # App
 # ----------------------------
 app = FastAPI()
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=SESSION_SECRET,
+    https_only=HTTPS_ONLY,
+    same_site="lax",
+)
 templates = Jinja2Templates(directory="templates")
 
 _db_pool: Optional[asyncpg.Pool] = None
@@ -48,14 +60,11 @@ _db_pool: Optional[asyncpg.Pool] = None
 def _now_kst() -> datetime:
     return datetime.now(tz=KST)
 
-
 def _kst_date() -> date:
     return _now_kst().date()
 
-
 def _format_hhmm_kst(dt: datetime) -> str:
     return dt.astimezone(KST).strftime("%H:%M")
-
 
 def _safe_slug(s: str) -> str:
     s = (s or "").strip().lower()
@@ -66,27 +75,26 @@ def _safe_slug(s: str) -> str:
         s = "place"
     return s[:32]
 
-
 async def db() -> asyncpg.Pool:
     if _db_pool is None:
         raise RuntimeError("DB pool not initialized")
     return _db_pool
-
 
 async def discord_api(method: str, path: str, *, json_body: Any = None, params: Dict[str, Any] | None = None) -> httpx.Response:
     if not DISCORD_BOT_TOKEN:
         raise RuntimeError("DISCORD_BOT_TOKEN not set")
     headers = {
         "Authorization": f"Bot {DISCORD_BOT_TOKEN}",
-        "User-Agent": "qr-checkin-bot (https://railway.app, 0.2)",
+        "User-Agent": "qr-checkin-bot (https://railway.app, 0.1)",
     }
     url = f"https://discord.com/api/v10{path}"
     async with httpx.AsyncClient(timeout=20) as client:
         return await client.request(method, url, headers=headers, json=json_body, params=params)
 
-
 async def get_guild_member_display(user_id: str) -> Tuple[str, str]:
-    """Returns (server_display_name, username)."""
+    """
+    Returns (server_display_name, username)
+    """
     if not DISCORD_GUILD_ID:
         return (user_id, user_id)
     try:
@@ -103,7 +111,6 @@ async def get_guild_member_display(user_id: str) -> Tuple[str, str]:
     except Exception:
         return (user_id, user_id)
 
-
 def _is_admin_from_interaction(interaction: Dict[str, Any]) -> bool:
     member = interaction.get("member") or {}
     if DISCORD_ADMIN_ROLE_ID:
@@ -117,25 +124,16 @@ def _is_admin_from_interaction(interaction: Dict[str, Any]) -> bool:
     except Exception:
         return False
 
-
-def _message(content: str, *, ephemeral: bool = False, components: Optional[List[Dict[str, Any]]] = None, embeds: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
-    data: Dict[str, Any] = {"content": content}
-    if ephemeral:
-        data["flags"] = 64
+def _ephemeral_message(content: str, *, components: Optional[List[Dict[str, Any]]] = None, embeds: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+    data: Dict[str, Any] = {"content": content, "flags": 64}
     if components is not None:
         data["components"] = components
     if embeds is not None:
         data["embeds"] = embeds
     return {"type": 4, "data": data}
 
-
-def _ephemeral_message(content: str, *, components: Optional[List[Dict[str, Any]]] = None, embeds: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
-    return _message(content, ephemeral=True, components=components, embeds=embeds)
-
-
 def _defer_ephemeral() -> Dict[str, Any]:
     return {"type": 5, "data": {"flags": 64}}
-
 
 def _update_message(*, content: Optional[str] = None, components: Optional[List[Dict[str, Any]]] = None, embeds: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     data: Dict[str, Any] = {}
@@ -146,7 +144,6 @@ def _update_message(*, content: Optional[str] = None, components: Optional[List[
     if embeds is not None:
         data["embeds"] = embeds
     return {"type": 7, "data": data}
-
 
 def _modal(custom_id: str, title: str, label: str, placeholder: str = "", value: str = "") -> Dict[str, Any]:
     return {
@@ -175,7 +172,6 @@ def _modal(custom_id: str, title: str, label: str, placeholder: str = "", value:
         },
     }
 
-
 def _select_menu(custom_id: str, placeholder: str, options: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return [
         {
@@ -193,24 +189,6 @@ def _select_menu(custom_id: str, placeholder: str, options: List[Dict[str, Any]]
         }
     ]
 
-
-def _button_row(label: str, custom_id: str, *, style: int = 1, disabled: bool = False) -> List[Dict[str, Any]]:
-    return [
-        {
-            "type": 1,
-            "components": [
-                {
-                    "type": 2,
-                    "style": style,
-                    "custom_id": custom_id,
-                    "label": label,
-                    "disabled": disabled,
-                }
-            ],
-        }
-    ]
-
-
 async def _send_admin_log(text: str) -> None:
     if not DISCORD_ADMIN_CHANNEL_ID:
         return
@@ -219,9 +197,7 @@ async def _send_admin_log(text: str) -> None:
     except Exception:
         pass
 
-
-async def _send_dm_with_components(user_id: str, *, content: str, components: Optional[List[Dict[str, Any]]] = None) -> bool:
-    """Send a DM with optional message components."""
+async def _send_dm(user_id: str, text: str) -> bool:
     try:
         r = await discord_api("POST", "/users/@me/channels", json_body={"recipient_id": str(user_id)})
         if r.status_code != 200:
@@ -229,14 +205,10 @@ async def _send_dm_with_components(user_id: str, *, content: str, components: Op
         ch_id = (r.json() or {}).get("id")
         if not ch_id:
             return False
-        payload: Dict[str, Any] = {"content": content}
-        if components is not None:
-            payload["components"] = components
-        r2 = await discord_api("POST", f"/channels/{ch_id}/messages", json_body=payload)
+        r2 = await discord_api("POST", f"/channels/{ch_id}/messages", json_body={"content": text})
         return r2.status_code in (200, 201)
     except Exception:
         return False
-
 
 def _get_base_url(request: Request) -> str:
     if BASE_URL:
@@ -244,7 +216,6 @@ def _get_base_url(request: Request) -> str:
     scheme = request.headers.get("x-forwarded-proto") or request.url.scheme
     host = request.headers.get("x-forwarded-host") or request.headers.get("host") or request.url.hostname
     return f"{scheme}://{host}".rstrip("/")
-
 
 # ----------------------------
 # DB Schema
@@ -254,9 +225,6 @@ CREATE TABLE IF NOT EXISTS places (
   id SERIAL PRIMARY KEY,
   slug TEXT UNIQUE NOT NULL,
   nickname TEXT NOT NULL,
-  channel_id BIGINT,
-  invite_url TEXT,
-  dm_request_message_id BIGINT,
   created_by BIGINT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -272,45 +240,93 @@ CREATE TABLE IF NOT EXISTS visits (
   UNIQUE(user_id, place_id, visit_date)
 );
 
-ALTER TABLE places ADD COLUMN IF NOT EXISTS channel_id BIGINT;
-ALTER TABLE places ADD COLUMN IF NOT EXISTS invite_url TEXT;
-ALTER TABLE places ADD COLUMN IF NOT EXISTS dm_request_message_id BIGINT;
-
 CREATE INDEX IF NOT EXISTS idx_visits_place_date ON visits(place_id, visit_date);
 CREATE INDEX IF NOT EXISTS idx_visits_user_place ON visits(user_id, place_id);
 """
 
+# ----------------------------
+# OAuth (visitor login)
+# ----------------------------
+# Authorization endpoint (recommended): https://discord.com/oauth2/authorize
+DISCORD_AUTH_URL = "https://discord.com/oauth2/authorize"
+DISCORD_TOKEN_URL = "https://discord.com/api/oauth2/token"
+DISCORD_ME_URL = "https://discord.com/api/users/@me"
+
+_OAUTH_STATE_SALT = "discord-oauth-state"
+_state_serializer = URLSafeTimedSerializer(SESSION_SECRET, salt=_OAUTH_STATE_SALT)
+
+def _make_oauth_state(loc: str) -> str:
+    loc = (loc or "").strip()[:64]
+    payload = {"loc": loc, "t": int(_now_kst().timestamp())}
+    return _state_serializer.dumps(payload)
+
+def _parse_oauth_state(state: str) -> str:
+    if not state:
+        return ""
+    try:
+        data = _state_serializer.loads(state, max_age=60 * 20)  # 20 minutes
+        return (data.get("loc") or "").strip()
+    except (BadSignature, SignatureExpired):
+        return ""
+
+def _build_authorize_url(*, loc: str = "") -> str:
+    params: Dict[str, Any] = {
+        "client_id": DISCORD_CLIENT_ID,
+        "redirect_uri": OAUTH_REDIRECT_URI,
+        "response_type": "code",
+        "scope": "identify",
+    }
+    if loc:
+        params["state"] = _make_oauth_state(loc)
+    return str(httpx.URL(DISCORD_AUTH_URL).copy_merge_params(params))
 
 def _require_env() -> None:
     missing = []
-    for k in ["DISCORD_CLIENT_ID", "DISCORD_PUBLIC_KEY", "DISCORD_BOT_TOKEN", "DISCORD_GUILD_ID", "DATABASE_URL"]:
+    for k in ["DISCORD_CLIENT_ID","DISCORD_CLIENT_SECRET","DISCORD_PUBLIC_KEY","DISCORD_BOT_TOKEN","DATABASE_URL","OAUTH_REDIRECT_URI"]:
         if not os.getenv(k):
             missing.append(k)
     if missing:
-        raise RuntimeError("Missing env vars: " + ", ".join(missing))
+        raise RuntimeError(f"Missing env vars: {', '.join(missing)}")
 
+async def exchange_code_for_token(code: str) -> str:
+    data = {
+        "client_id": DISCORD_CLIENT_ID,
+        "client_secret": DISCORD_CLIENT_SECRET,
+        "grant_type": "authorization_code",
+        "code": code,
+        "redirect_uri": OAUTH_REDIRECT_URI,
+    }
+    headers = {"Content-Type": "application/x-www-form-urlencoded"}
+    async with httpx.AsyncClient(timeout=20) as client:
+        r = await client.post(DISCORD_TOKEN_URL, data=data, headers=headers)
+        if r.status_code != 200:
+            raise HTTPException(status_code=400, detail="OAuth token exchange failed")
+        return (r.json() or {}).get("access_token")
+
+async def fetch_discord_user(access_token: str) -> Dict[str, Any]:
+    headers = {"Authorization": f"Bearer {access_token}"}
+    async with httpx.AsyncClient(timeout=20) as client:
+        r = await client.get(DISCORD_ME_URL, headers=headers)
+        if r.status_code != 200:
+            raise HTTPException(status_code=400, detail="Failed to fetch user")
+        return r.json()
 
 # ----------------------------
 # Startup
 # ----------------------------
 async def ensure_commands() -> None:
-    """Register guild commands for fast iteration (gateway 없이 Interactions만)."""
+    """
+    Register guild commands for fast iteration.
+    """
     if not DISCORD_GUILD_ID or not DISCORD_CLIENT_ID or not DISCORD_BOT_TOKEN:
         return
 
     commands = [
         {
             "name": "qr생성",
-            "description": "QR 장소를 생성합니다 (닉네임/채널). 생성 시 QR 이미지는 표시하지 않습니다.",
+            "description": "QR 장소를 생성합니다 (닉네임 설정). 생성 시 QR 이미지는 표시하지 않습니다.",
             "options": [
                 {"type": 3, "name": "닉네임", "description": "표시할 장소 닉네임", "required": True},
-                {
-                    "type": 7,
-                    "name": "채널",
-                    "description": "장소 안내/DM요청 버튼을 올릴 채널",
-                    "required": True,
-                    "channel_types": [0],
-                },
                 {"type": 3, "name": "슬러그", "description": "URL용 키(선택). 비우면 자동 생성", "required": False},
             ],
         },
@@ -334,15 +350,9 @@ async def ensure_commands() -> None:
             "options": [{"type": 6, "name": "유저", "description": "대상 유저", "required": True}],
         },
     ]
-
-    r = await discord_api(
-        "PUT",
-        f"/applications/{DISCORD_CLIENT_ID}/guilds/{DISCORD_GUILD_ID}/commands",
-        json_body=commands,
-    )
+    r = await discord_api("PUT", f"/applications/{DISCORD_CLIENT_ID}/guilds/{DISCORD_GUILD_ID}/commands", json_body=commands)
     if r.status_code not in (200, 201):
         print("Command register failed:", r.status_code, r.text)
-
 
 @app.on_event("startup")
 async def on_startup():
@@ -353,7 +363,6 @@ async def on_startup():
         await conn.execute(SCHEMA_SQL)
     await ensure_commands()
 
-
 @app.on_event("shutdown")
 async def on_shutdown():
     global _db_pool
@@ -361,35 +370,33 @@ async def on_shutdown():
         await _db_pool.close()
         _db_pool = None
 
-
 # ----------------------------
-# Web routes (디자인 유지: 안내용)
+# Web routes
 # ----------------------------
 @app.get("/health")
 async def health():
     return {"ok": True}
 
-
 async def get_place_by_slug(slug: str) -> Optional[Dict[str, Any]]:
     pool = await db()
     async with pool.acquire() as conn:
-        row = await conn.fetchrow(
-            "SELECT id, slug, nickname, invite_url FROM places WHERE slug=$1",
-            slug,
-        )
+        row = await conn.fetchrow("SELECT id, slug, nickname FROM places WHERE slug=$1", slug)
     return dict(row) if row else None
-
 
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request, loc: str = ""):
     slug = (loc or "").strip()
-    invite_url = ""
     if slug:
         place = await get_place_by_slug(slug)
         place_name = place["nickname"] if place else "등록되지 않은 장소"
-        invite_url = (place.get("invite_url") if place else "") or ""
     else:
         place_name = "장소 정보 없음"
+
+    is_logged_in = bool(request.session.get("user"))
+    status_text = "로그인 필요" if not is_logged_in else "로그인됨"
+    logout_style = "" if is_logged_in else "display:none;"
+
+    oauth_url = _build_authorize_url(loc=slug) if slug else _build_authorize_url(loc="")
 
     return templates.TemplateResponse(
         "index.html",
@@ -397,116 +404,114 @@ async def index(request: Request, loc: str = ""):
             "request": request,
             "loc": slug,
             "place_name": place_name,
-            "invite_url": invite_url,
+            "is_logged_in": is_logged_in,
+            "status_text": status_text,
+            "logout_style": logout_style,
+            "oauth_url": oauth_url,
         },
     )
 
+@app.get("/login")
+async def login(request: Request, loc: str = ""):
+    if loc:
+        request.session["return_loc"] = loc
 
-# ----------------------------
-# Discord helpers for Places/Invites
-# ----------------------------
-async def _create_channel_invite(channel_id: int) -> str:
-    """Create a non-expiring invite for a channel and return URL."""
-    r = await discord_api(
-        "POST",
-        f"/channels/{channel_id}/invites",
-        json_body={"max_age": 0, "max_uses": 0, "temporary": False, "unique": True},
-    )
-    if r.status_code not in (200, 201):
-        raise RuntimeError(f"invite create failed: {r.status_code} {r.text}")
-    code = (r.json() or {}).get("code")
+    # Note: do not force prompt=none; it can fail in many mobile/app flows.
+    url = _build_authorize_url(loc=loc)
+    return RedirectResponse(url, status_code=302)
+
+@app.get("/oauth/callback")
+async def oauth_callback(request: Request, code: str = "", state: str = ""):
     if not code:
-        raise RuntimeError("invite code missing")
-    return f"https://discord.gg/{code}"
+        raise HTTPException(status_code=400, detail="Missing code")
 
+    token = await exchange_code_for_token(code)
+    user = await fetch_discord_user(token)
 
-async def _post_dm_request_message(channel_id: int, place_id: int, place_nickname: str) -> Optional[int]:
-    """Post a message in the place channel that lets visitors request a DM check-in button."""
-    content = (
-        f"### ✅ {place_nickname} 체크인 안내\n"
-        "아래 버튼을 눌러 **봇 DM으로 체크인 버튼**을 받아주세요.\n"
-        "(DM이 오지 않으면: 사용자 설정에서 DM 허용 / 봇 DM 차단 해제)"
-    )
-    components = _button_row("DM으로 체크인", f"dm_request:{place_id}")
-    r = await discord_api("POST", f"/channels/{channel_id}/messages", json_body={"content": content, "components": components})
-    if r.status_code not in (200, 201):
-        return None
-    msg_id = (r.json() or {}).get("id")
-    try:
-        if msg_id:
-            await discord_api("PUT", f"/channels/{channel_id}/pins/{msg_id}")
-    except Exception:
-        pass
-    return int(msg_id) if msg_id else None
+    request.session["user"] = {"id": user.get("id"), "username": user.get("username"), "global_name": user.get("global_name")}
 
+    loc = _parse_oauth_state(state)
+    if not loc:
+        loc = (request.session.pop("return_loc", "") or "").strip()
+    if loc:
+        return RedirectResponse(f"/?loc={loc}", status_code=302)
+    return RedirectResponse("/", status_code=302)
 
-async def _edit_dm_request_message(channel_id: int, message_id: int, place_id: int, place_nickname: str) -> None:
-    try:
-        content = (
-            f"### ✅ {place_nickname} 체크인 안내\n"
-            "아래 버튼을 눌러 **봇 DM으로 체크인 버튼**을 받아주세요.\n"
-            "(DM이 오지 않으면: 사용자 설정에서 DM 허용 / 봇 DM 차단 해제)"
-        )
-        components = _button_row("DM으로 체크인", f"dm_request:{place_id}")
-        await discord_api(
-            "PATCH",
-            f"/channels/{channel_id}/messages/{message_id}",
-            json_body={"content": content, "components": components},
-        )
-    except Exception:
-        pass
+@app.get("/logout")
+async def logout(request: Request):
+    request.session.clear()
+    return RedirectResponse("/", status_code=302)
 
+@app.post("/api/checkin")
+async def api_checkin(request: Request):
+    body = await request.json()
+    slug = (body.get("loc") or "").strip()
+    if not slug:
+        raise HTTPException(status_code=400, detail="loc is required")
 
-# ----------------------------
-# DB helpers
-# ----------------------------
-async def _places_options() -> List[Dict[str, Any]]:
+    place = await get_place_by_slug(slug)
+    if not place:
+        raise HTTPException(status_code=404, detail="등록되지 않은 장소입니다.")
+
+    user = request.session.get("user")
+    if not user or not user.get("id"):
+        raise HTTPException(status_code=401, detail="로그인 필요")
+
+    user_id = str(user["id"])
+    username = (user.get("username") or "").strip() or user_id
+
+    # enrich with server nickname if possible
+    server_display, _uname = await get_guild_member_display(user_id)
+    if server_display == user_id:
+        server_display = (user.get("global_name") or "").strip() or username
+
+    today = _kst_date()
+    now = _now_kst()
     pool = await db()
-    async with pool.acquire() as conn:
-        rows = await conn.fetch("SELECT id, nickname, slug FROM places ORDER BY id DESC LIMIT 200")
-    opts = []
-    for r in rows:
-        label = str(r["nickname"])[:100]
-        desc = f"loc={r['slug']}"[:100]
-        opts.append({"label": label, "value": str(r["id"]), "description": desc})
-    return opts
 
-
-async def _place_by_id(place_id: int) -> Optional[Dict[str, Any]]:
-    pool = await db()
+    inserted = False
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
-            "SELECT id, slug, nickname, channel_id, invite_url, dm_request_message_id FROM places WHERE id=$1",
-            place_id,
+            """
+            INSERT INTO visits(user_id, place_id, visit_date, server_display_name, username)
+            VALUES($1, $2, $3, $4, $5)
+            ON CONFLICT DO NOTHING
+            RETURNING id
+            """,
+            int(user_id), int(place["id"]), today, server_display, username,
         )
-    return dict(row) if row else None
+        inserted = row is not None
 
+        count = await conn.fetchval("SELECT COUNT(*) FROM visits WHERE user_id=$1 AND place_id=$2", int(user_id), int(place["id"]))
 
-def _make_qr_png(url: str) -> bytes:
-    qr = qrcode.QRCode(version=2, error_correction=qrcode.constants.ERROR_CORRECT_M, box_size=10, border=4)
-    qr.add_data(url)
-    qr.make(fit=True)
-    img = qr.make_image(fill_color="black", back_color="white")
-    buf = io.BytesIO()
-    img.save(buf, format="PNG")
-    return buf.getvalue()
+    place_nickname = place["nickname"]
 
+    if inserted:
+        dm_text = f"{server_display}님 {place_nickname} 방문을 환영합니다! (누적 {count}번째 방문이시네요)"
+        dm_ok = await _send_dm(user_id, dm_text)
+    else:
+        dm_ok = True
 
-async def _interaction_followup_send(interaction_token: str, *, content: str, file_bytes: Optional[bytes] = None, filename: str = "file.png") -> None:
-    if not DISCORD_CLIENT_ID:
-        return
-    url = f"https://discord.com/api/v10/webhooks/{DISCORD_CLIENT_ID}/{interaction_token}"
-    payload = {"content": content, "flags": 64}
-    async with httpx.AsyncClient(timeout=20) as client:
-        if file_bytes is None:
-            await client.post(url, json=payload)
-            return
-        files = {
-            "payload_json": (None, json.dumps(payload), "application/json"),
-            "files[0]": (filename, file_bytes, "image/png"),
-        }
-        await client.post(url, files=files)
+    # NOTE: 이미 오늘(해당 장소) 체크인한 경우에는 운영진 채널에 메시지를 남기지 않습니다.
+    if inserted:
+        admin_label = "오늘 첫 방문"
+        ping = f"\n<@&{DISCORD_PING_ROLE_ID}>" if DISCORD_PING_ROLE_ID else ""
+        visitor_line = f"{server_display} ({username})"
+        visit_time_str = _format_hhmm_kst(now)
 
+        admin_text = (
+            f"## [입장 알림] {server_display}님이 체크인했습니다! ({admin_label})\n"
+            f"방문자 : {visitor_line}\n"
+            f"방문 시간 : {visit_time_str} (KST)\n"
+            f"방문 횟수 : {count}번째 방문\n"
+            f"{place_nickname} : {slug}"
+            + ("" if dm_ok else "\n※ DM 전송 실패(사용자 DM 차단 가능)")
+            + ping
+        )
+        await _send_admin_log(admin_text)
+
+    msg = f"{place_nickname} 체크인 완료" if inserted else f"오늘은 이미 {place_nickname} 체크인했습니다."
+    return {"ok": True, "message": msg}
 
 # ----------------------------
 # Discord Interactions
@@ -523,17 +528,46 @@ def _verify_discord_signature(headers: Dict[str, str], raw_body: bytes) -> bool:
     except Exception:
         return False
 
+async def _places_options() -> List[Dict[str, Any]]:
+    pool = await db()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch("SELECT id, nickname, slug FROM places ORDER BY id DESC LIMIT 200")
+    opts = []
+    for r in rows:
+        label = str(r["nickname"])[:100]
+        desc = f"loc={r['slug']}"[:100]
+        opts.append({"label": label, "value": str(r["id"]), "description": desc})
+    return opts
 
-def _interaction_user(interaction: Dict[str, Any]) -> Dict[str, Any]:
-    # guild interaction: member.user, dm interaction: user
-    member = interaction.get("member") or {}
-    return (member.get("user") or {}) if member else (interaction.get("user") or {})
+async def _place_by_id(place_id: int) -> Optional[Dict[str, Any]]:
+    pool = await db()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT id, slug, nickname FROM places WHERE id=$1", place_id)
+    return dict(row) if row else None
 
+def _make_qr_png(url: str) -> bytes:
+    qr = qrcode.QRCode(version=2, error_correction=qrcode.constants.ERROR_CORRECT_M, box_size=10, border=4)
+    qr.add_data(url)
+    qr.make(fit=True)
+    img = qr.make_image(fill_color="black", back_color="white")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
 
-def _user_id_str(interaction: Dict[str, Any]) -> str:
-    u = _interaction_user(interaction)
-    return str(u.get("id") or "")
-
+async def _interaction_followup_send(interaction_token: str, *, content: str, file_bytes: Optional[bytes] = None, filename: str = "file.png") -> None:
+    if not DISCORD_CLIENT_ID:
+        return
+    url = f"https://discord.com/api/v10/webhooks/{DISCORD_CLIENT_ID}/{interaction_token}"
+    payload = {"content": content, "flags": 64}
+    async with httpx.AsyncClient(timeout=20) as client:
+        if file_bytes is None:
+            await client.post(url, json=payload)
+            return
+        files = {
+            "payload_json": (None, json.dumps(payload), "application/json"),
+            "files[0]": (filename, file_bytes, "image/png"),
+        }
+        await client.post(url, files=files)
 
 async def _render_place_history_update(*, place_id: int, page: int) -> JSONResponse:
     place = await _place_by_id(place_id)
@@ -573,11 +607,7 @@ async def _render_place_history_update(*, place_id: int, page: int) -> JSONRespo
     if not lines:
         lines = ["(기록 없음)"]
 
-    embed = {
-        "title": f"장소 방문기록 — {place['nickname']}",
-        "description": "\n".join(lines),
-        "footer": {"text": f"{page}/{total_pages} 페이지"},
-    }
+    embed = {"title": f"장소 방문기록 — {place['nickname']}", "description": "\n".join(lines), "footer": {"text": f"{page}/{total_pages} 페이지"}}
     components = [
         {
             "type": 1,
@@ -590,7 +620,6 @@ async def _render_place_history_update(*, place_id: int, page: int) -> JSONRespo
     ]
     return JSONResponse(_update_message(content="", embeds=[embed], components=components))
 
-
 @app.post("/discord/interactions")
 async def discord_interactions(request: Request):
     raw = await request.body()
@@ -599,7 +628,6 @@ async def discord_interactions(request: Request):
 
     interaction = json.loads(raw.decode("utf-8"))
 
-    # PING
     if interaction.get("type") == 1:
         return JSONResponse({"type": 1})
 
@@ -616,9 +644,8 @@ async def discord_interactions(request: Request):
             opts = {o["name"]: o.get("value") for o in (data.get("options") or [])}
             nickname = str(opts.get("닉네임") or "").strip()
             slug_in = str(opts.get("슬러그") or "").strip()
-            channel_id = int(opts.get("채널") or 0)
-            if not nickname or not channel_id:
-                return JSONResponse(_ephemeral_message("닉네임/채널을 입력해주세요."))
+            if not nickname:
+                return JSONResponse(_ephemeral_message("닉네임을 입력해주세요."))
 
             slug = _safe_slug(slug_in or nickname)
 
@@ -627,50 +654,17 @@ async def discord_interactions(request: Request):
                 exists = await conn.fetchval("SELECT 1 FROM places WHERE slug=$1", slug)
                 if exists:
                     slug = (slug + "-" + str(int(datetime.utcnow().timestamp()))[-4:])[:32]
-
-                user_id = int((_interaction_user(interaction).get("id") or 0))
-                # create DB row first
-                row = await conn.fetchrow(
-                    """
-                    INSERT INTO places(slug, nickname, channel_id, created_by)
-                    VALUES($1,$2,$3,$4)
-                    RETURNING id
-                    """,
-                    slug,
-                    nickname,
-                    int(channel_id),
-                    user_id,
-                )
-                place_id = int(row["id"])
-
-            # create invite + post channel message
-            try:
-                invite_url = await _create_channel_invite(int(channel_id))
-            except Exception as e:
-                invite_url = ""
-                return JSONResponse(_ephemeral_message(f"❌ 초대 링크 생성 실패: {e}"))
-
-            msg_id = await _post_dm_request_message(int(channel_id), place_id, nickname)
-
-            pool = await db()
-            async with pool.acquire() as conn:
-                await conn.execute(
-                    "UPDATE places SET invite_url=$1, dm_request_message_id=$2 WHERE id=$3",
-                    invite_url,
-                    msg_id,
-                    place_id,
-                )
+                user_id = int(((interaction.get("member") or {}).get("user") or {}).get("id") or 0)
+                await conn.execute("INSERT INTO places(slug, nickname, created_by) VALUES($1,$2,$3)", slug, nickname, user_id)
 
             base = _get_base_url(request)
-            info_url = f"{base}/?loc={slug}"
+            url = f"{base}/?loc={slug}"
             content = (
                 "✅ QR 장소 생성 완료\n"
                 f"- 닉네임: **{nickname}**\n"
                 f"- loc: `{slug}`\n"
-                f"- Discord 초대 링크(= QR 대상): {invite_url}\n"
-                f"- 안내 웹페이지(선택): {info_url}\n\n"
-                "※ 생성 명령어에서는 QR 이미지를 표시하지 않습니다.\n"
-                "※ 장소 채널에 'DM으로 체크인' 버튼 안내 메시지를 올렸습니다(가능하면 핀 고정)."
+                f"- 링크(이걸로 QR 생성): {url}\n\n"
+                "※ 생성 명령어에서는 QR 이미지를 표시하지 않습니다."
             )
             return JSONResponse(_ephemeral_message(content))
 
@@ -755,7 +749,6 @@ async def discord_interactions(request: Request):
         if cid == "noop":
             return JSONResponse(_update_message())
 
-        # --- place selections
         if cid in ("qr_view_select", "qr_rename_select", "qr_delete_select", "place_history_select"):
             values = data.get("values") or []
             if not values:
@@ -767,29 +760,10 @@ async def discord_interactions(request: Request):
 
             if cid == "qr_view_select":
                 token = interaction.get("token")
-
-                invite_url = (place.get("invite_url") or "").strip()
-                if not invite_url and place.get("channel_id"):
-                    try:
-                        invite_url = await _create_channel_invite(int(place["channel_id"]))
-                        pool = await db()
-                        async with pool.acquire() as conn:
-                            await conn.execute("UPDATE places SET invite_url=$1 WHERE id=$2", invite_url, place_id)
-                    except Exception:
-                        invite_url = ""
-
-                if not invite_url:
-                    return JSONResponse(_ephemeral_message("초대 링크가 없습니다. `/qr생성`을 다시 시도해 주세요."))
-
-                png = _make_qr_png(invite_url)
-                asyncio.create_task(
-                    _interaction_followup_send(
-                        token,
-                        content=f"**{place['nickname']}** QR 코드\n(이 QR은 Discord 초대 링크로 이동합니다)",
-                        file_bytes=png,
-                        filename=f"{place['slug']}.png",
-                    )
-                )
+                base = _get_base_url(request)
+                url = f"{base}/?loc={place['slug']}"
+                png = _make_qr_png(url)
+                asyncio.create_task(_interaction_followup_send(token, content=f"**{place['nickname']}** QR 코드", file_bytes=png, filename=f"{place['slug']}.png"))
                 return JSONResponse(_defer_ephemeral())
 
             if cid == "qr_rename_select":
@@ -810,99 +784,6 @@ async def discord_interactions(request: Request):
             if cid == "place_history_select":
                 return await _render_place_history_update(place_id=place_id, page=1)
 
-        # --- DM request button in channel
-        if cid.startswith("dm_request:"):
-            place_id = int(cid.split(":", 1)[1])
-            place = await _place_by_id(place_id)
-            if not place:
-                return JSONResponse(_ephemeral_message("장소를 찾을 수 없습니다."))
-
-            uid = _user_id_str(interaction)
-            if not uid:
-                return JSONResponse(_ephemeral_message("유저 정보를 읽을 수 없습니다."))
-
-            ok = await _send_dm_with_components(
-                uid,
-                content=(
-                    f"**{place['nickname']}** 체크인\n"
-                    "아래 버튼을 눌러 체크인하세요. (하루 1회/장소별)"
-                ),
-                components=_button_row("✅ 체크인", f"do_checkin:{place_id}"),
-            )
-            if ok:
-                return JSONResponse(_ephemeral_message("✅ DM으로 체크인 버튼을 보냈습니다!"))
-            return JSONResponse(_ephemeral_message("❌ DM 전송 실패: 사용자가 DM을 차단했을 수 있어요."))
-
-        # --- Check-in button in DM
-        if cid.startswith("do_checkin:"):
-            place_id = int(cid.split(":", 1)[1])
-            place = await _place_by_id(place_id)
-            if not place:
-                return JSONResponse(_message("장소를 찾을 수 없습니다."))
-
-            uid = _user_id_str(interaction)
-            if not uid:
-                return JSONResponse(_message("유저 정보를 읽을 수 없습니다."))
-
-            u = _interaction_user(interaction)
-            username = (u.get("username") or "").strip() or uid
-
-            # server display name if possible
-            server_display, _uname = await get_guild_member_display(uid)
-            if server_display == uid:
-                server_display = (u.get("global_name") or "").strip() or username
-
-            today = _kst_date()
-            now = _now_kst()
-            pool = await db()
-
-            inserted = False
-            async with pool.acquire() as conn:
-                row = await conn.fetchrow(
-                    """
-                    INSERT INTO visits(user_id, place_id, visit_date, server_display_name, username)
-                    VALUES($1, $2, $3, $4, $5)
-                    ON CONFLICT DO NOTHING
-                    RETURNING id
-                    """,
-                    int(uid),
-                    int(place_id),
-                    today,
-                    server_display,
-                    username,
-                )
-                inserted = row is not None
-                count = await conn.fetchval(
-                    "SELECT COUNT(*) FROM visits WHERE user_id=$1 AND place_id=$2",
-                    int(uid),
-                    int(place_id),
-                )
-
-            # 운영진 채널: 오늘 이미 체크인한 경우 출력하지 않음
-            if inserted:
-                visit_time_str = _format_hhmm_kst(now)
-                label = "오늘 첫 방문" if int(count) == 1 else f"누적 {count}회차"
-                ping = f"\n<@&{DISCORD_PING_ROLE_ID}>" if DISCORD_PING_ROLE_ID else ""
-                visitor_line = f"{server_display} ({username})"
-                admin_text = (
-                    f"## [입장 알림] {server_display}님이 체크인했습니다! ({label})\n"
-                    f"장소 : {place['nickname']}\n"
-                    f"방문자 : {visitor_line}\n"
-                    f"방문 시간 : {visit_time_str} (KST)\n"
-                    f"방문 횟수 : {count}번째 방문"
-                    + ping
-                )
-                await _send_admin_log(admin_text)
-
-            # DM 메시지 업데이트(버튼 비활성)
-            if inserted:
-                content = f"✅ 체크인 완료!\n{place['nickname']} 방문을 환영합니다. (누적 {count}번째 방문)"
-            else:
-                content = f"ℹ️ 오늘은 이미 **{place['nickname']}** 체크인했습니다.\n(하루 1회/장소별)"
-            components = _button_row("✅ 체크인", f"do_checkin:{place_id}", disabled=True)
-            return JSONResponse(_update_message(content=content, components=components))
-
-        # --- reset/select etc
         if cid.startswith("reset_select:"):
             uid = cid.split(":", 1)[1]
             values = data.get("values") or []
@@ -912,12 +793,7 @@ async def discord_interactions(request: Request):
             today = _kst_date()
             pool = await db()
             async with pool.acquire() as conn:
-                await conn.execute(
-                    "DELETE FROM visits WHERE user_id=$1 AND place_id=$2 AND visit_date=$3",
-                    int(uid),
-                    int(place_id),
-                    today,
-                )
+                await conn.execute("DELETE FROM visits WHERE user_id=$1 AND place_id=$2 AND visit_date=$3", int(uid), int(place_id), today)
             return JSONResponse(_update_message(content=f"✅ 초기화 완료 (user={uid}, place_id={place_id})", components=[]))
 
         if cid.startswith("delete_visits_select:"):
@@ -942,33 +818,20 @@ async def discord_interactions(request: Request):
 
         if cid == "qr_delete_cancel":
             return JSONResponse(_update_message(content="취소되었습니다.", components=[]))
-
         if cid.startswith("qr_delete_confirm:"):
             place_id = int(cid.split(":", 1)[1])
-            place = await _place_by_id(place_id)
             pool = await db()
             async with pool.acquire() as conn:
                 await conn.execute("DELETE FROM places WHERE id=$1", place_id)
-            # best effort: delete pinned message
-            try:
-                if place and place.get("channel_id") and place.get("dm_request_message_id"):
-                    await discord_api("DELETE", f"/channels/{int(place['channel_id'])}/messages/{int(place['dm_request_message_id'])}")
-            except Exception:
-                pass
             return JSONResponse(_update_message(content="✅ 삭제 완료", components=[]))
 
         if cid == "delete_visits_cancel":
             return JSONResponse(_update_message(content="취소되었습니다.", components=[]))
-
         if cid.startswith("delete_visits_confirm:"):
-            _, uid, place_id_s = cid.split(":")
+            _, uid, place_id = cid.split(":")
             pool = await db()
             async with pool.acquire() as conn:
-                await conn.execute(
-                    "DELETE FROM visits WHERE user_id=$1 AND place_id=$2",
-                    int(uid),
-                    int(place_id_s),
-                )
+                await conn.execute("DELETE FROM visits WHERE user_id=$1 AND place_id=$2", int(uid), int(place_id))
             return JSONResponse(_update_message(content="✅ 방문기록 삭제 완료", components=[]))
 
         if cid.startswith("place_history_page:"):
@@ -993,22 +856,7 @@ async def discord_interactions(request: Request):
             pool = await db()
             async with pool.acquire() as conn:
                 await conn.execute("UPDATE places SET nickname=$1 WHERE id=$2", new_name, place_id)
-                place = await conn.fetchrow(
-                    "SELECT slug, channel_id, dm_request_message_id FROM places WHERE id=$1",
-                    place_id,
-                )
-
-            # edit pinned message to reflect new nickname
-            if place and place.get("channel_id") and place.get("dm_request_message_id"):
-                asyncio.create_task(
-                    _edit_dm_request_message(
-                        int(place["channel_id"]),
-                        int(place["dm_request_message_id"]),
-                        place_id,
-                        new_name,
-                    )
-                )
-
+                place = await conn.fetchrow("SELECT slug FROM places WHERE id=$1", place_id)
             return JSONResponse(_ephemeral_message(f"✅ 닉네임 수정 완료: **{new_name}** (loc=`{place['slug']}`)"))
 
         return JSONResponse(_ephemeral_message("알 수 없는 모달입니다."))
