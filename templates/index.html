@@ -19,6 +19,14 @@
     .result.ok{border-color:rgba(0,255,140,.35)}
     .result.err{border-color:rgba(255,90,90,.35)}
     .small{opacity:.7;font-size:13px;margin-top:10px}
+    /* modal */
+    .modalBack{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;align-items:center;justify-content:center;padding:18px;}
+    .modal{width:min(520px,100%);background:#0e1733;border:1px solid rgba(255,255,255,.10);border-radius:16px;padding:18px;box-shadow:0 20px 70px rgba(0,0,0,.55);}
+    .modal h2{margin:0 0 10px;font-size:20px;letter-spacing:-.2px}
+    .modal p{margin:0 0 12px;opacity:.85;line-height:1.45}
+    .row{display:flex;gap:10px;flex-wrap:wrap}
+    .row .btn{flex:1;min-width:140px}
+    .hint{opacity:.7;font-size:12.5px;margin-top:10px}
   </style>
 </head>
 <body>
@@ -32,6 +40,26 @@
     <button class="btn ghost" id="logoutBtn" style="{{ logout_style }}">로그아웃</button>
 
     <div class="result" id="resultBox"></div>
+  </div>
+</div>
+
+<!-- 로그인 선택 모달 (추가 User Gesture) -->
+<div class="modalBack" id="loginModalBack" aria-hidden="true">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="loginModalTitle">
+    <h2 id="loginModalTitle">Discord 로그인</h2>
+    <p id="loginModalBody">모바일에서는 브라우저 정책 때문에 앱으로 자동 전환이 실패할 수 있어요. 아래 버튼으로 <b>직접</b> 로그인 방식을 선택해주세요.</p>
+    <div class="row">
+      <button class="btn primary" id="appLoginBtn">앱으로 로그인하기</button>
+      <button class="btn ghost" id="webLoginBtn">웹으로 로그인하기</button>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <button class="btn ghost" id="openDiscordBtn">Discord 앱 열기(로그인용)</button>
+      <button class="btn ghost" id="closeModalBtn">닫기</button>
+    </div>
+    <div class="hint">
+      • Discord 앱에 로그인이 안 되어 있다면, 먼저 <b>Discord 앱 열기</b>로 로그인 후 다시 <b>앱으로 로그인하기</b>를 눌러주세요.<br/>
+      • 앱으로 전환이 안 되면 <b>웹으로 로그인하기</b>를 사용하세요.
+    </div>
   </div>
 </div>
 
@@ -64,33 +92,54 @@ function buildDiscordSchemeUrl(webUrl){
 }
 
 function startDiscordLogin(){
-  // Mobile browsers often require a user gesture for deep links.
-  // This function is called directly from the button click when possible.
-  const web = OAUTH_URL;
+  // Legacy function kept for compatibility; now we require an extra user gesture.
+  openLoginModal();
+}
 
-  // Desktop: just use the normal web OAuth flow.
+function openLoginModal(){
+  const back = document.getElementById("loginModalBack");
+  back.style.display = "flex";
+  back.setAttribute("aria-hidden", "false");
+}
+
+function closeLoginModal(){
+  const back = document.getElementById("loginModalBack");
+  back.style.display = "none";
+  back.setAttribute("aria-hidden", "true");
+}
+
+function openDiscordApp(){
+  // Open Discord app itself (for logging in). Must be called by user gesture.
+  if(isAndroid()){
+    window.location.href = "intent://discord.com/channels/@me#Intent;scheme=https;package=com.discord;end";
+    return;
+  }
+  // iOS: best-effort scheme
+  window.location.href = "discord://";
+}
+
+function appLogin(){
+  // Must be called by user gesture.
+  const web = OAUTH_URL;
   if(!isAndroid() && !isIOS()){
+    // Desktop: app login doesn't make sense
     window.location.href = web;
     return;
   }
-  const intent = buildAndroidIntentUrl(web);
-  const scheme = buildDiscordSchemeUrl(web);
-
-  // 1) Android: try intent:// which more strongly prefers the installed app
-  if(isAndroid() && intent){
-    window.location.href = intent;
-  } else {
-    // 2) iOS/others: try discord://
-    window.location.href = scheme;
-  }
-
-  // 3) fallback to web OAuth if the app doesn't open
-  setTimeout(() => {
-    // If the app opened, the page usually becomes hidden.
-    if(document.visibilityState !== "hidden"){
-      window.location.href = web;
+  if(isAndroid()){
+    const intent = buildAndroidIntentUrl(web);
+    if(intent){
+      // Chrome will use browser_fallback_url automatically if app can't handle it.
+      window.location.href = intent;
+      return;
     }
-  }, 800);
+  }
+  // iOS / fallback best-effort
+  window.location.href = buildDiscordSchemeUrl(web);
+}
+
+function webLogin(){
+  window.location.href = OAUTH_URL;
 }
 
 function showResult(kind, html){
@@ -104,11 +153,20 @@ document.getElementById("logoutBtn").addEventListener("click", () => {
   window.location.href = "/logout";
 });
 
+// modal handlers
+document.getElementById("loginModalBack").addEventListener("click", (e) => {
+  if(e.target && e.target.id === "loginModalBack") closeLoginModal();
+});
+document.getElementById("closeModalBtn").addEventListener("click", closeLoginModal);
+document.getElementById("appLoginBtn").addEventListener("click", () => { closeLoginModal(); appLogin(); });
+document.getElementById("webLoginBtn").addEventListener("click", () => { closeLoginModal(); webLogin(); });
+document.getElementById("openDiscordBtn").addEventListener("click", () => { openDiscordApp(); });
+
 document.getElementById("checkinBtn").addEventListener("click", async () => {
   try{
     if(!IS_LOGGED_IN){
-      showResult("err", "Discord 로그인 후 체크인할 수 있어요. 로그인 화면으로 이동합니다.");
-      startDiscordLogin();
+      showResult("err", "디스코드 어플에서 로그인 후 진행해주세요. (또는 웹 로그인 선택)");
+      openLoginModal();
       return;
     }
 
@@ -120,8 +178,8 @@ document.getElementById("checkinBtn").addEventListener("click", async () => {
     });
 
     if(r.status === 401){
-      showResult("err", "세션이 만료됐어요. Discord 로그인 화면으로 이동합니다.");
-      startDiscordLogin();
+      showResult("err", "세션이 만료됐어요. 디스코드 어플에서 로그인 후 다시 진행해주세요.");
+      openLoginModal();
       return;
     }
 
