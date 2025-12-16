@@ -26,72 +26,21 @@
   <div class="card">
     <h1>체크인</h1>
     <p class="place" id="placeName">{{ place_name }}</p>
-    <p class="status">상태: <b id="statusText">{{ status_text }}</b></p>
 
-    <button class="btn primary" id="checkinBtn">Discord로 체크인</button>
-    <button class="btn ghost" id="logoutBtn" style="{{ logout_style }}">로그아웃</button>
+    {% if invite_url %}
+      <button class="btn primary" id="goDiscordBtn">Discord로 이동</button>
+      <p class="small">Discord 채널에서 <b>DM으로 체크인</b> 버튼을 누른 뒤, DM에서 체크인하세요. (하루 1회/장소별)</p>
+    {% else %}
+      <p class="status">이 loc는 등록되지 않았거나, 초대 링크가 아직 설정되지 않았습니다.</p>
+    {% endif %}
 
-    <div class="result" id="resultBox"></div>
+    <div class="result" id="resultBox" style="display:none"></div>
   </div>
 </div>
 
 <script>
-const LOC = {{ loc | tojson }};
-const OAUTH_URL = {{ oauth_url | tojson }};
-const IS_LOGGED_IN = {{ 'true' if is_logged_in else 'false' }};
-
-function isAndroid(){
-  return /Android/i.test(navigator.userAgent);
-}
-
-function isIOS(){
-  return /iPhone|iPad|iPod/i.test(navigator.userAgent);
-}
-
-function buildAndroidIntentUrl(webUrl){
-  try{
-    const u = new URL(webUrl);
-    const fallback = encodeURIComponent(webUrl);
-    return `intent://${u.host}${u.pathname}${u.search}#Intent;scheme=https;package=com.discord;S.browser_fallback_url=${fallback};end`;
-  }catch(e){
-    return "";
-  }
-}
-
-function buildDiscordSchemeUrl(webUrl){
-  // Try to open via the Discord app scheme; fallback to web.
-  return webUrl.replace(/^https:\/\//i, "discord://");
-}
-
-function startDiscordLogin(){
-  // Mobile browsers often require a user gesture for deep links.
-  // This function is called directly from the button click when possible.
-  const web = OAUTH_URL;
-
-  // Desktop: just use the normal web OAuth flow.
-  if(!isAndroid() && !isIOS()){
-    window.location.href = web;
-    return;
-  }
-  const intent = buildAndroidIntentUrl(web);
-  const scheme = buildDiscordSchemeUrl(web);
-
-  // 1) Android: try intent:// which more strongly prefers the installed app
-  if(isAndroid() && intent){
-    window.location.href = intent;
-  } else {
-    // 2) iOS/others: try discord://
-    window.location.href = scheme;
-  }
-
-  // 3) fallback to web OAuth if the app doesn't open
-  setTimeout(() => {
-    // If the app opened, the page usually becomes hidden.
-    if(document.visibilityState !== "hidden"){
-      window.location.href = web;
-    }
-  }, 800);
-}
+const LOC = "{{ loc }}";
+const INVITE_URL = "{{ invite_url }}";
 
 function showResult(kind, html){
   const box = document.getElementById("resultBox");
@@ -100,41 +49,16 @@ function showResult(kind, html){
   box.innerHTML = html;
 }
 
-document.getElementById("logoutBtn").addEventListener("click", () => {
-  window.location.href = "/logout";
-});
-
-document.getElementById("checkinBtn").addEventListener("click", async () => {
-  try{
-    if(!IS_LOGGED_IN){
-      showResult("err", "Discord 로그인 후 체크인할 수 있어요. 로그인 화면으로 이동합니다.");
-      startDiscordLogin();
+const btn = document.getElementById("goDiscordBtn");
+if(btn){
+  btn.addEventListener("click", () => {
+    if(!INVITE_URL){
+      showResult("err", "초대 링크가 없습니다.");
       return;
     }
-
-    const r = await fetch("/api/checkin", {
-      method:"POST",
-      headers: {"Content-Type":"application/json"},
-      body: JSON.stringify({loc: LOC}),
-      credentials:"include",
-    });
-
-    if(r.status === 401){
-      showResult("err", "세션이 만료됐어요. Discord 로그인 화면으로 이동합니다.");
-      startDiscordLogin();
-      return;
-    }
-
-    const data = await r.json();
-    if(!r.ok){
-      showResult("err", data.detail || "체크인에 실패했습니다.");
-      return;
-    }
-    showResult("ok", "<b>환영합니다!</b><br/>" + (data.message || ""));
-  }catch(e){
-    showResult("err", "오류가 발생했습니다. 잠시 후 다시 시도해주세요.");
-  }
-});
+    window.location.href = INVITE_URL;
+  });
+}
 </script>
 </body>
 </html>
