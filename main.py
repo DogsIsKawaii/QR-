@@ -457,6 +457,10 @@ async def index(request: Request, loc: str = ""):
     if loc:
         oauth_url += f"?loc={loc}"
 
+    # Mobile "APP login" deep-link attempts work best with an absolute Discord authorize URL.
+    # (Using a relative URL like "/oauth/start" breaks URL parsing in many mobile browsers.)
+    discord_authorize_url = discord_oauth_authorize_url(loc) if loc else ""
+
     return templates.TemplateResponse(
         "index.html",
         {
@@ -467,6 +471,7 @@ async def index(request: Request, loc: str = ""):
             "logout_style": logout_style,
             "is_logged_in": is_logged_in,
             "oauth_url": oauth_url,
+            "discord_authorize_url": discord_authorize_url,
         },
     )
 

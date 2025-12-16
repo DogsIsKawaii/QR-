@@ -95,6 +95,7 @@
 <script>
 const LOC = {{ loc | tojson }};
 const OAUTH_URL = {{ oauth_url | tojson }};
+const DISCORD_AUTHORIZE_URL = {{ discord_authorize_url | tojson }};
 const IS_LOGGED_IN = {{ 'true' if is_logged_in else 'false' }};
 
 function isAndroid(){ return /Android/i.test(navigator.userAgent); }
@@ -109,7 +110,7 @@ function isInAppBrowser(){
 function buildAndroidIntentUrl(webUrl){
   // intent://discord.com/oauth2/authorize?...#Intent;scheme=https;package=com.discord;S.browser_fallback_url=<encodedWebUrl>;end
   try{
-    const u = new URL(webUrl);
+    const u = new URL(webUrl, window.location.origin);
     const fallback = encodeURIComponent(webUrl);
     return `intent://${u.host}${u.pathname}${u.search}#Intent;scheme=${u.protocol.replace(':','')};package=com.discord;S.browser_fallback_url=${fallback};end`;
   }catch(e){
@@ -119,7 +120,16 @@ function buildAndroidIntentUrl(webUrl){
 
 function buildDiscordSchemeUrl(webUrl){
   // Best-effort iOS attempt. If unsupported, we fallback to web.
-  return webUrl.replace(/^https:\/\//i, "discord://");
+  try{
+    const u = new URL(webUrl, window.location.origin);
+    // Discord app commonly understands discord://-/oauth2/authorize?... style deep-links
+    if(/^discord\.com$/i.test(u.hostname) && u.pathname.startsWith("/oauth2/authorize")){
+      return `discord://-/oauth2/authorize${u.search}`;
+    }
+    return u.toString().replace(/^https?:\/\//i, "discord://");
+  }catch(e){
+    return "";
+  }
 }
 
 function buildDiscordAppOpenUrl(){
@@ -150,25 +160,32 @@ function openWithFallback(primaryUrl, fallbackUrl){
 }
 
 function openDiscordOAuthInApp(){
-  const web = OAUTH_URL;
+  // Use absolute Discord authorize URL for app deep-linking.
+  // (OAUTH_URL is usually a relative path like "/oauth/start", which breaks URL parsing.)
+  const web = (DISCORD_AUTHORIZE_URL || (new URL(OAUTH_URL, window.location.origin).toString()));
+  const fallback = OAUTH_URL;
 
   // Desktop: always web.
   if(!isAndroid() && !isIOS()){
-    window.location.href = web;
+    window.location.href = fallback;
     return;
   }
 
   if(isAndroid()){
     const intent = buildAndroidIntentUrl(web);
     if(intent){
-      openWithFallback(intent, web);
+      openWithFallback(intent, fallback);
       return;
     }
   }
 
   // iOS: try discord:// then fallback to web
   const scheme = buildDiscordSchemeUrl(web);
-  openWithFallback(scheme, web);
+  if(scheme){
+    openWithFallback(scheme, fallback);
+  }else{
+    window.location.href = fallback;
+  }
 }
 
 function openDiscordApp(){
