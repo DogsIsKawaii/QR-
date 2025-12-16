@@ -60,11 +60,7 @@
     <p id="modalDesc">APP에 로그인되어 있다면, APP에서 바로 승인 화면으로 넘어갈 수 있어요.</p>
 
     <!-- 요청하신 "아까 문구"를 첫 화면 버튼 클릭 시(모달 열릴 때) 보이도록 배치 -->
-    <div class="risk" id="securityRisk">
-      web 로그인시, 디스코드 계정에 대한 보안에 문제가 발생할 수 있음을 인지하며, web 로그인시 발생하는 문제에 대한 책임은 해당 봇 사용자에게 있음을 인지합니다. 그래도 진행하겠습니까?
-    </div>
-
-    <div class="warn" id="inAppWarn">
+<div class="warn" id="inAppWarn">
       현재 <b>인앱 브라우저</b>로 열려있을 가능성이 있어요. 이 환경에서는 APP 전환이 막힐 수 있습니다.
       가능하면 우측 상단 메뉴에서 <b>기본 브라우저(Chrome/Safari)로 열기</b>로 다시 시도해주세요.
     </div>
@@ -73,12 +69,21 @@
     <div class="actions">
       <button class="btn primary big" id="openAppLoginBtn">APP으로 로그인 하기</button>
 
-      <div class="mini">
-        <button class="btn ghost" id="openDiscordAppBtn">Discord 앱 먼저 열기</button>
-        <button class="btn ghost" id="openWebLoginBtn">WEB으로 로그인 하기 (비추천)</button>
+      
+    <div class="risk" id="securityRisk">
+      <b>사전 설명</b><br/>
+      1. web 로그인시, 디스코드 계정에 대한 보안에 문제가 발생할 수 있으며 이에 동의하고 인지합니다.<br/>
+      2. web 로그인 후 반드시 Discord 계정을 web에서 로그아웃 해야하며 이에 동의하고 인지합니다. (해당 봇 로그아웃이 아닌 Discord 자체 로그아웃)<br/>
+      3. web 로그인 후 Discord 계정의 비밀번호를 변경할것을 권장하며 이에 동의하고 인지합니다.<br/>
+      4. web 로그인시 발생하는 문제에 대한 책임은 해당 봇 사용자에게 있음을 동의하고 인지합니다.
+    </div>
+
+<div class="mini">
+        <button class="btn ghost" id="openDiscordAppBtn">Discord APP 먼저 열기</button>
+        <button class="btn ghost" id="openWebLoginBtn">WEB으로 로그인 하기</button>
       </div>
 
-      <p class="hint">* APP으로 로그인 하기를 눌렀을때 WEB으로 연동되는 경우가 발생 할 수 있습니다. 해당 경우에는 봇에 사전 설명을 인지하여 주시고 진행해주세요.</p>
+      <p class="hint">* APP으로 로그인 하기를 눌렀을때 WEB 로그인창으로 연동되는 경우가 발생 할 수 있습니다. 해당 경우에 WEB에서 로그인을 진행할 시 봇에 사전 설명을 동의하며 인지하고 있는것으로 간주됩니다.</p>
     </div>
 
     <div class="row">
