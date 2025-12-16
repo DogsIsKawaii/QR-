@@ -209,13 +209,8 @@ document.getElementById("openAppLoginBtn").addEventListener("click", () => {
 });
 
 document.getElementById("openWebLoginBtn").addEventListener("click", () => {
-  // WEB 로그인은 비추천: 최소한의 확인 팝업을 한 번 더 띄워줌
-  const ok = confirm(
-    "web 로그인시, 디스코드 계정에 대한 보안에 문제가 발생할 수 있음을 인지하며, web 로그인시 발생하는 문제에 대한 책임은 해당 봇 사용자에게 있음을 인지합니다.
-
-그래도 진행하겠습니까?"
-  );
-  if(!ok) return;
+  // WEB 로그인은 비추천: 안내 문구는 모달 상단(risk 박스)에 표시됨.
+  // 여기서는 추가 confirm 없이 바로 WEB OAuth로 이동.
   window.location.href = OAUTH_URL;
 });
 
