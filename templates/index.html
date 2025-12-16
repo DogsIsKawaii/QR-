@@ -24,10 +24,17 @@
     .modal{width:min(520px,100%);background:#0e1733;border:1px solid rgba(255,255,255,.10);border-radius:16px;padding:18px 16px;box-shadow:0 20px 60px rgba(0,0,0,.45);}
     .modal h2{margin:0 0 10px;font-size:20px;letter-spacing:-.2px}
     .modal p{margin:0 0 10px;opacity:.88;line-height:1.45}
+
     .row{display:flex;gap:10px;margin-top:10px}
     .row .btn{flex:1}
+
+    .actions{margin-top:10px}
+    .btn.big{padding:18px 16px;font-size:18px;border-radius:14px}
+
     .mini{margin-top:10px;display:flex;gap:10px}
-    .mini .btn{flex:1;padding:12px 12px;font-size:14px;font-weight:700;border-radius:12px}
+    .mini .btn{flex:1;padding:12px 12px;font-size:14px;font-weight:800;border-radius:12px;margin-top:0}
+
+    .risk{margin-top:10px;padding:10px;border-radius:12px;background:rgba(255,180,0,.08);border:1px solid rgba(255,180,0,.25);font-size:13px;opacity:.95;}
     .warn{margin-top:10px;padding:10px;border-radius:12px;background:rgba(255,90,90,.10);border:1px solid rgba(255,90,90,.25);font-size:13px;opacity:.95;display:none}
     .hint{font-size:13px;opacity:.72;margin-top:10px}
   </style>
@@ -50,24 +57,29 @@
 <div class="backdrop" id="loginBackdrop" aria-hidden="true">
   <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
     <h2 id="modalTitle">Discord 로그인</h2>
-    <p id="modalDesc">앱에 로그인되어 있다면 앱에서 바로 승인 화면으로 넘어갈 수 있어요.</p>
+    <p id="modalDesc">APP에 로그인되어 있다면, APP에서 바로 승인 화면으로 넘어갈 수 있어요.</p>
+
+    <!-- 요청하신 "아까 문구"를 첫 화면 버튼 클릭 시(모달 열릴 때) 보이도록 배치 -->
+    <div class="risk" id="securityRisk">
+      web 로그인시, 디스코드 계정에 대한 보안에 문제가 발생할 수 있음을 인지하며, web 로그인시 발생하는 문제에 대한 책임은 해당 봇 사용자에게 있음을 인지합니다. 그래도 진행하겠습니까?
+    </div>
 
     <div class="warn" id="inAppWarn">
-      현재 <b>인앱 브라우저</b>로 열려있을 가능성이 있어요. 이 환경에서는 앱 전환이 막힐 수 있습니다.
+      현재 <b>인앱 브라우저</b>로 열려있을 가능성이 있어요. 이 환경에서는 APP 전환이 막힐 수 있습니다.
       가능하면 우측 상단 메뉴에서 <b>기본 브라우저(Chrome/Safari)로 열기</b>로 다시 시도해주세요.
     </div>
 
-    <div class="row">
-      <button class="btn primary" id="openAppLoginBtn">앱으로 로그인하기</button>
-      <button class="btn ghost" id="openWebLoginBtn">웹으로 로그인하기</button>
-    </div>
+    <!-- 3번째 이미지 형태로 UI 재배치 -->
+    <div class="actions">
+      <button class="btn primary big" id="openAppLoginBtn">APP으로 로그인 하기</button>
 
-    <div class="mini">
-      <button class="btn ghost" id="openDiscordAppBtn">Discord 앱 먼저 열기</button>
-      <button class="btn ghost" id="copyLoginLinkBtn">로그인 링크 복사</button>
-    </div>
+      <div class="mini">
+        <button class="btn ghost" id="openDiscordAppBtn">Discord 앱 먼저 열기</button>
+        <button class="btn ghost" id="openWebLoginBtn">WEB으로 로그인 하기 (비추천)</button>
+      </div>
 
-    <p class="hint">※ 앱 전환이 안 되면 “웹으로 로그인하기”로 진행하면 됩니다.</p>
+      <p class="hint">* APP으로 로그인 하기를 눌렀을때 WEB으로 연동되는 경우가 발생 할 수 있습니다. 해당 경우에는 봇에 사전 설명을 인지하여 주시고 진행해주세요.</p>
+    </div>
 
     <div class="row">
       <button class="btn ghost" id="closeModalBtn">닫기</button>
@@ -90,7 +102,6 @@ function isInAppBrowser(){
 }
 
 function buildAndroidIntentUrl(webUrl){
-  // Recommended style:
   // intent://discord.com/oauth2/authorize?...#Intent;scheme=https;package=com.discord;S.browser_fallback_url=<encodedWebUrl>;end
   try{
     const u = new URL(webUrl);
@@ -125,8 +136,6 @@ function openWithFallback(primaryUrl, fallbackUrl){
   window.location.href = primaryUrl;
 
   setTimeout(() => {
-    // If the browser couldn't open the app, we likely remain visible.
-    // Use a slightly longer timeout to reduce false fallbacks.
     const stillVisible = document.visibilityState !== "hidden" && !didHide;
     const elapsed = Date.now() - startedAt;
     if(stillVisible && elapsed >= 900){
@@ -159,7 +168,6 @@ function openDiscordOAuthInApp(){
 
 function openDiscordApp(){
   const url = buildDiscordAppOpenUrl();
-  // no web fallback here (user just wants to open the app)
   window.location.href = url;
 }
 
@@ -183,22 +191,6 @@ function closeModal(){
   bd.setAttribute("aria-hidden", "true");
 }
 
-async function copyToClipboard(text){
-  try{
-    await navigator.clipboard.writeText(text);
-    showResult("ok", "로그인 링크를 복사했어요.");
-  }catch(e){
-    // fallback
-    const ta = document.createElement('textarea');
-    ta.value = text;
-    document.body.appendChild(ta);
-    ta.select();
-    document.execCommand('copy');
-    document.body.removeChild(ta);
-    showResult("ok", "로그인 링크를 복사했어요.");
-  }
-}
-
 // Buttons
 
 document.getElementById("logoutBtn").addEventListener("click", () => {
@@ -212,24 +204,29 @@ document.getElementById("loginBackdrop").addEventListener("click", (e) => {
 });
 
 document.getElementById("openAppLoginBtn").addEventListener("click", () => {
-  // This is the explicit User Gesture that tends to satisfy Chrome policies.
+  // Explicit User Gesture.
   openDiscordOAuthInApp();
 });
 
 document.getElementById("openWebLoginBtn").addEventListener("click", () => {
+  // WEB 로그인은 비추천: 최소한의 확인 팝업을 한 번 더 띄워줌
+  const ok = confirm(
+    "web 로그인시, 디스코드 계정에 대한 보안에 문제가 발생할 수 있음을 인지하며, web 로그인시 발생하는 문제에 대한 책임은 해당 봇 사용자에게 있음을 인지합니다.
+
+그래도 진행하겠습니까?"
+  );
+  if(!ok) return;
   window.location.href = OAUTH_URL;
 });
 
 document.getElementById("openDiscordAppBtn").addEventListener("click", () => openDiscordApp());
-
-document.getElementById("copyLoginLinkBtn").addEventListener("click", () => copyToClipboard(OAUTH_URL));
 
 // Main flow
 
 document.getElementById("checkinBtn").addEventListener("click", async () => {
   try{
     if(!IS_LOGGED_IN){
-      // Do NOT auto-jump. Show modal first (extra user gesture).
+      // Show modal first (extra user gesture + 안내 문구 표시)
       openModal();
       return;
     }
@@ -242,7 +239,6 @@ document.getElementById("checkinBtn").addEventListener("click", async () => {
     });
 
     if(r.status === 401){
-      // Session expired.
       showResult("err", "세션이 만료됐어요. 아래 버튼으로 Discord 로그인을 진행해주세요.");
       openModal();
       return;
