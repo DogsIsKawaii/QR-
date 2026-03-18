@@ -408,7 +408,6 @@ def discord_oauth_authorize_url(state: str) -> str:
         "response_type": "code",
         "scope": scope,
         "state": state,
-        "prompt": "none",
     }
     from urllib.parse import urlencode
     return "https://discord.com/oauth2/authorize?" + urlencode(params)
